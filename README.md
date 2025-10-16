@@ -35,6 +35,8 @@ Table of Contents
 =================
 
 * [Unitree Robot BLE Service Command Injection Analysis](#unitree-robot-ble-service-command-injection-analysis)
+   * [Repository Overview](#repository-overview)
+   * [BLE Exploit Flow Diagram](#ble-exploit-flow-diagram)
    * [Overview](#overview)
    * [BLE Service Discovery](#ble-service-discovery)
    * [Reverse Engineering the Protocol](#reverse-engineering-the-protocol)
@@ -70,6 +72,66 @@ Table of Contents
    * [Contributing](#contributing)
    * [Licensing, and access to these files](#licensing-and-access-to-these-files)
 
+## Repository Overview
+
+This repository accompanies the Unitree BLE Wi-Fi exploitation research with a Python tooling stack and supporting assets.
+
+- `unitree_hack.py` implements the end-to-end exploit workflow. It parses CLI flags, initializes a small SQLite cache (`unitree_devices.db`), scans for compatible Unitree robots over BLE using `bleak`, negotiates the custom AES-CFB encrypted protocol, and injects payloads via crafted Wi-Fi credentials.
+- `images/` holds the reverse-engineering figures referenced throughout the report.
+- `UnitreeHack.apk` is an Android build of the same attack path for on-the-go testing; it is not required to use the Python script but demonstrates portability.
+- Runtime artifacts: the script creates `unitree_devices.db` to remember the last five targets so repeat attempts can skip scanning and reconnect quickly.
+
+Key functions inside `unitree_hack.py`:
+
+| Function | Responsibility |
+| --- | --- |
+| `init_db`, `save_device`, `list_recent_devices` | Maintain a rolling history of recently targeted robots for quick reconnection. |
+| `get_user_input` | Collects operator choices, builds payload strings, and assembles Wi-Fi+command injection modes. |
+| `build_pwn`, `create_packet`, `encrypt_data`, `decrypt_data` | Craft protocol-compliant packets around the hardcoded AES key/IV and append malicious shell snippets. |
+| `find_robot`, `select_device` | Discover robots via BLE and allow the user to pick cached or freshly scanned devices. |
+| `connect_and_configure_wifi` | Core async workflow that hooks notifications, performs handshakes, streams SSID/password chunks, and triggers the vulnerable Wi-Fi thread. |
+| `wait_for_notification`, `generic_response_validator` | Provide resilient packet validation, timeouts, and checksum verification during asynchronous BLE exchanges. |
+| `main` | Orchestrates device selection and kicks off the configuration handshake once inputs are ready. |
+
+The script leans on `asyncio` to juggle BLE traffic, uses fallbacks for different characteristic handles, and saves progress with verbose logging so operators can understand where a run may have failed.
+
+## BLE Exploit Flow Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Operator
+    participant Script as unitree_hack.py
+    participant Robot as Unitree Robot
+    Operator->>Script: Launch tool / set CLI flags
+    Script->>Script: init_db(); list_recent_devices()
+    Script->>Operator: Prompt for mode, Wi-Fi creds, payload
+    Operator-->>Script: Provide SSID/password/command choice
+    Script->>Script: BleakScanner.discover() for Unitree devices
+    Script->>Operator: Present cached + discovered targets
+    Operator-->>Script: Select device
+    Script->>Robot: Connect via BleakClient(address)
+    Script->>Robot: start_notify(UUID 0xFFE1 or handle 13 backup)
+    Robot-->>Script: AES-CFB notification stream
+    Script->>Robot: write handshake packet (instruction 0x01, "unitree")
+    Robot-->>Script: ACK sets valid_incoming_user flag
+    Script->>Robot: request serial number (instruction 0x02)
+    Robot-->>Script: Chunked serial notifications reassembled
+    Script->>Robot: initialize STA mode (instruction 0x03)
+    Robot-->>Script: ACK validates checksum and opcode
+    loop For each SSID chunk ≤14 bytes
+        Script->>Robot: write SSID chunk (instruction 0x04)
+        Robot-->>Script: Final chunk ACK enables next stage
+    end
+    loop For each password chunk ≤14 bytes
+        Script->>Robot: write password chunk (instruction 0x05 + build_pwn payload)
+        Robot-->>Script: Final chunk ACK confirms receipt
+    end
+    Script->>Robot: set country code & trigger thread (instruction 0x06)
+    Robot-->>Script: ACK; WifiSettingThreadFunction runs injected command
+    Script->>Script: save_device() to SQLite cache
+    Script-->>Operator: Report success / failures via styled_print
+```
 
 ---
 
