@@ -104,7 +104,8 @@ sequenceDiagram
     participant Script as unitree_hack.py
     participant Robot as Unitree Robot
     Operator->>Script: Launch tool / set CLI flags
-    Script->>Script: init_db(); list_recent_devices()
+    Script->>Script: init_db()
+    Script->>Script: list_recent_devices()
     Script->>Operator: Prompt for mode, Wi-Fi creds, payload
     Operator-->>Script: Provide SSID/password/command choice
     Script->>Script: BleakScanner.discover() for Unitree devices
@@ -119,16 +120,16 @@ sequenceDiagram
     Robot-->>Script: Chunked serial notifications reassembled
     Script->>Robot: initialize STA mode (instruction 0x03)
     Robot-->>Script: ACK validates checksum and opcode
-    loop For each SSID chunk ≤14 bytes
+    loop Each SSID chunk <= 14 bytes
         Script->>Robot: write SSID chunk (instruction 0x04)
         Robot-->>Script: Final chunk ACK enables next stage
     end
-    loop For each password chunk ≤14 bytes
+    loop Each password chunk <= 14 bytes
         Script->>Robot: write password chunk (instruction 0x05 + build_pwn payload)
         Robot-->>Script: Final chunk ACK confirms receipt
     end
     Script->>Robot: set country code & trigger thread (instruction 0x06)
-    Robot-->>Script: ACK; WifiSettingThreadFunction runs injected command
+    Robot-->>Script: ACK and WifiSettingThreadFunction runs injected command
     Script->>Script: save_device() to SQLite cache
     Script-->>Operator: Report success / failures via styled_print
 ```
